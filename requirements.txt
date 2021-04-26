@@ -1,0 +1,9 @@
+jupyter lab
+opencv-python
+sscv
+tqdm
+matplotlib
+pytorch
+psd-tools
+mmcv-full
+mmsegmentation 
