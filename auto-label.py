@@ -3,6 +3,7 @@
 import matplotlib.pyplot as plt
 import os.path as osp 
 import sscv 
+import numpy as np 
 
 from psd_tools import PSDImage
 from pytoshop.user import nested_layers
@@ -16,7 +17,7 @@ from mmseg.core.evaluation import get_palette
 
 # Input directory information 
 # make auto-label dir as a argparse variable 
-auto_label_dir = "/run/user/1000/gvfs/afp-volume:host=DiskStation.local,user=shm_nas,volume=Volume_2/06. Auto-Labeling"
+auto_label_dir = "/home/sss/UOS-SSaS Dropbox/05. Data/06. Auto Labeling"
 
 dataset_name = 'General Crack'
 raw_img_dir_name = '/home/sss/UOS-SSaS Dropbox/05. Data/06. Auto Labeling/General Crack/01. Raw Image'
@@ -61,21 +62,18 @@ def pre_label_imgs(rsz_img_dir, pre_label_dir):
 
     for idx, img_filename in enumerate(imgs_to_pre_label_list): 
 
-        img_filepath = osp.join(rsz_img_dir, img_filename)
         img_basename = osp.basename(img_filename).split('.')[0]
+        img_filepath = osp.join(rsz_img_dir, img_basename + '.jpg')
         
         img = sscv.imread(img_filepath)
 
         result = inference_segmentor(model, img_filepath)
 
-        # read dummy psd file from directory 
-        dummy_psd = PSDImage.open(dummy_psd_filepath)
-
         psd_layers = []
 
         bg_channels = [img[:,:,0], img[:,:,1], img[:,:,2]]
                 
-        bg_width, bg_height = img.shape[0], img.shape[1] 
+        bg_height, bg_width = img.shape[0], img.shape[1] 
 
         bg_layer = nested_layers.Image(name='Background',
                                     visible=True, opacity=255, group_id=0,
@@ -84,8 +82,34 @@ def pre_label_imgs(rsz_img_dir, pre_label_dir):
                                     bottom=bg_height, right=bg_width, channels=bg_channels,
                                     metadata=None, layer_color=0, color_mode=None)
 
-        psd_layers.append(bg_layer)
+        detection_result_with_transparent_background = np.ones((img.shape[0], img.shape[1], 4) , dtype = np.uint8)*255 # create white image 
+        
+        # detection_result_with_transparent_background[:, :, 3] =  0
+        
+        crack_area = result[0] == 1
+        non_crack_area = result[0] != 1
+        detection_result_with_transparent_background[crack_area, 0] =  255
+        detection_result_with_transparent_background[crack_area, 1] =  0
+        detection_result_with_transparent_background[crack_area , 2] =  0
+        detection_result_with_transparent_background[non_crack_area , 3] =  0
 
+        lyr_channels = {}
+
+        lyr_channels[-1] = detection_result_with_transparent_background[:,:,3]
+        lyr_channels[0] = detection_result_with_transparent_background[:,:,0]
+        lyr_channels[1] = detection_result_with_transparent_background[:,:,1]
+        lyr_channels[2] = detection_result_with_transparent_background[:,:,2]
+        
+        crack_layer = nested_layers.Image(name='Crack',
+                                    visible=True, opacity=255, group_id=0,
+                                    blend_mode=enums.BlendMode.normal, 
+                                    top=0, left=0, 
+                                    bottom=bg_height, right=bg_width, channels=lyr_channels,
+                                    metadata=None, layer_color=0, color_mode=None)
+
+        
+        psd_layers.append(crack_layer)
+        psd_layers.append(bg_layer)
 
         output = nested_layers.nested_layers_to_psd(psd_layers, color_mode=3, depth=8,
                                                     size=(bg_width, bg_height))
@@ -94,8 +118,6 @@ def pre_label_imgs(rsz_img_dir, pre_label_dir):
 
         with open(save_dir, 'wb') as fd:
             output.write(fd)
-
-
 
 
 def resize_and_move_imgs(raw_img_dir, rsz_img_dir): 
@@ -142,8 +164,6 @@ def resize_and_move_imgs(raw_img_dir, rsz_img_dir):
             )
         
         sscv.imwrite(rsz_img_path, rsz_img)
-
-
 
 
 def main(): 
