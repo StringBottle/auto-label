@@ -4,3 +4,5 @@ sscv
 tqdm
 matplotlib
 psd-tools
+pytoshop
+
