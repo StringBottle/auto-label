@@ -1,9 +1,6 @@
-jupyter lab
+jupyterlab
 opencv-python
 sscv
 tqdm
 matplotlib
-pytorch
 psd-tools
-mmcv-full
-mmsegmentation 
