@@ -17,20 +17,90 @@ from mmseg.core.evaluation import get_palette
 
 # Input directory information 
 # make auto-label dir as a argparse variable 
+
+#TODO : make these inputs as argparse inputs 
+#TODO : add erosion to damage area 
+
+# auto_label_dir = "/home/sss/UOS-SSaS Dropbox/05. Data/06. Auto Labeling"
+
+# dataset_name = 'General Crack'
+# raw_img_dir_name = '/home/sss/UOS-SSaS Dropbox/05. Data/06. Auto Labeling/General Crack/01. Raw Image'
+# rsz_img_dir_name = '02. Resized Image'
+# pre_label_dir_name = '03. Pre-labeled Psd Files'
+# corrected_label_dir_name = '04. Corrected Psd files' 
+# rsz_img_size = 2048
+
+# config_file = '/home/sss/UOS-SSaS Dropbox/05. Data/03. Checkpoints/2020.09.02_deeplabv3plus_r101-d8_769x769_40k_concrete_damage_cs/deeplabv3plus_r101-d8_769x769_40k_concrete_damage_cs.py'
+# checkpoint_file = '/home/sss/UOS-SSaS Dropbox/05. Data/03. Checkpoints/2020.09.02_deeplabv3plus_r101-d8_769x769_40k_concrete_damage_cs/iter_40000.pth'
+
+
 auto_label_dir = "/home/sss/UOS-SSaS Dropbox/05. Data/06. Auto Labeling"
 
-dataset_name = 'General Crack'
-raw_img_dir_name = '/home/sss/UOS-SSaS Dropbox/05. Data/06. Auto Labeling/General Crack/01. Raw Image'
+dataset_name = 'KCQR'
+raw_img_dir_name = '/home/sss/UOS-SSaS Dropbox/05. Data/06. Auto Labeling/KCQR/01. Raw Image'
 rsz_img_dir_name = '02. Resized Image'
 pre_label_dir_name = '03. Pre-labeled Psd Files'
 corrected_label_dir_name = '04. Corrected Psd files' 
-rsz_img_size = 2048
+rsz_img_size = 1024
 
 config_file = '/home/sss/UOS-SSaS Dropbox/05. Data/03. Checkpoints/2020.09.02_deeplabv3plus_r101-d8_769x769_40k_concrete_damage_cs/deeplabv3plus_r101-d8_769x769_40k_concrete_damage_cs.py'
 checkpoint_file = '/home/sss/UOS-SSaS Dropbox/05. Data/03. Checkpoints/2020.09.02_deeplabv3plus_r101-d8_769x769_40k_concrete_damage_cs/iter_40000.pth'
 
-dummy_psd_filepath = '/home/sss/UOS-SSaS Dropbox/05. Data/06. Auto Labeling/General Crack/01. Raw Image/dummy.psd'
+num_of_class = 4 # not include background 
 
+palette = [
+    [255, 0, 0], # crack 
+    [0, 255, 0], # effl 
+    [0, 255, 255], # rebar
+    [255, 255, 0], # spalling
+]
+
+classes = ['crack', 'efflorescence', 'rebar', 'spalling']
+
+
+def create_layer_from_detection_result(detection_result, class_num, class_name, color_map):
+
+    """
+    Args :
+        detection_result (list) : detection result of mmsegmentation model 
+        class_num (int or float) : class number 
+        class_name (str) : class_name 
+        color_map (list) : RGB value of color to highlight damage area
+
+    Return : 
+        damage_layer (pytoshop nested layer) : layer with damage detection 
+
+    """
+
+    height, width = detection_result[0].shape[0], detection_result[0].shape[1]
+     
+    # create white RGBA image with white color 
+    detection_result_with_transparent_bg = np.ones((height, width, 4) , dtype = np.uint8)*255
+
+
+    damage_area = detection_result[0] == class_num
+    non_damage_area = detection_result[0] != class_num
+    detection_result_with_transparent_bg[damage_area, 0] =  color_map[0]
+    detection_result_with_transparent_bg[damage_area, 1] =  color_map[1]
+    detection_result_with_transparent_bg[damage_area , 2] =  color_map[2]
+    detection_result_with_transparent_bg[non_damage_area , 3] =  0
+
+    # create image channel dictionary according to pytoshop nested_layers' input
+    lyr_channels = {}
+
+    lyr_channels[-1] = detection_result_with_transparent_bg[:,:,3]
+    lyr_channels[0] = detection_result_with_transparent_bg[:,:,0]
+    lyr_channels[1] = detection_result_with_transparent_bg[:,:,1]
+    lyr_channels[2] = detection_result_with_transparent_bg[:,:,2]
+
+    damage_layer = nested_layers.Image(name=class_name,
+                                visible=True, opacity=255, group_id=0,
+                                blend_mode=enums.BlendMode.normal, 
+                                top=0, left=0, 
+                                bottom=height, right=width, channels=lyr_channels,
+                                metadata=None, layer_color=0, color_mode=None)
+
+    return damage_layer
 
 def pre_label_imgs(rsz_img_dir, pre_label_dir):
 
@@ -54,20 +124,18 @@ def pre_label_imgs(rsz_img_dir, pre_label_dir):
 
 
     print("Compare resized image list and psd file list....")
-    imgs_to_pre_label_list = [img_path for img_path in pre_label_list if img_path not in rsz_img_list]
+    imgs_to_pre_label_list = [img_path for img_path in rsz_img_list if img_path not in pre_label_list]
     print("{} images are found not in the psd files folder.".format(len(imgs_to_pre_label_list)))
 
     # build the model from a config file and a checkpoint file
     model = init_segmentor(config_file, checkpoint_file, device='cuda:0')
 
-    for idx, img_filename in enumerate(imgs_to_pre_label_list): 
+    for img_filename in tqdm(imgs_to_pre_label_list): 
 
         img_basename = osp.basename(img_filename).split('.')[0]
         img_filepath = osp.join(rsz_img_dir, img_basename + '.jpg')
         
         img = sscv.imread(img_filepath)
-
-        result = inference_segmentor(model, img_filepath)
 
         psd_layers = []
 
@@ -82,33 +150,16 @@ def pre_label_imgs(rsz_img_dir, pre_label_dir):
                                     bottom=bg_height, right=bg_width, channels=bg_channels,
                                     metadata=None, layer_color=0, color_mode=None)
 
-        detection_result_with_transparent_background = np.ones((img.shape[0], img.shape[1], 4) , dtype = np.uint8)*255 # create white image 
-        
-        # detection_result_with_transparent_background[:, :, 3] =  0
-        
-        crack_area = result[0] == 1
-        non_crack_area = result[0] != 1
-        detection_result_with_transparent_background[crack_area, 0] =  255
-        detection_result_with_transparent_background[crack_area, 1] =  0
-        detection_result_with_transparent_background[crack_area , 2] =  0
-        detection_result_with_transparent_background[non_crack_area , 3] =  0
+        detection_result = inference_segmentor(model, img_filepath)
 
-        lyr_channels = {}
+        for class_num in range(num_of_class):
+            
+            class_name = classes[class_num]
+            color_map = palette[class_num]
+            damage_layer = create_layer_from_detection_result(detection_result, class_num+1, class_name, color_map) # add 1 to class num to avoid background
+            psd_layers.append(damage_layer)
+            
 
-        lyr_channels[-1] = detection_result_with_transparent_background[:,:,3]
-        lyr_channels[0] = detection_result_with_transparent_background[:,:,0]
-        lyr_channels[1] = detection_result_with_transparent_background[:,:,1]
-        lyr_channels[2] = detection_result_with_transparent_background[:,:,2]
-        
-        crack_layer = nested_layers.Image(name='Crack',
-                                    visible=True, opacity=255, group_id=0,
-                                    blend_mode=enums.BlendMode.normal, 
-                                    top=0, left=0, 
-                                    bottom=bg_height, right=bg_width, channels=lyr_channels,
-                                    metadata=None, layer_color=0, color_mode=None)
-
-        
-        psd_layers.append(crack_layer)
         psd_layers.append(bg_layer)
 
         output = nested_layers.nested_layers_to_psd(psd_layers, color_mode=3, depth=8,
