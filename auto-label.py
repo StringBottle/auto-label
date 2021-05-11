@@ -1,64 +1,28 @@
 
-
-import matplotlib.pyplot as plt
-import os.path as osp 
+import argparse
 import sscv 
+import cv2
+
+import os.path as osp 
 import numpy as np 
 
-from psd_tools import PSDImage
 from pytoshop.user import nested_layers
 from pytoshop import enums
 from pytoshop.image_data import ImageData
 from glob import glob 
 from tqdm import tqdm
 
-from mmseg.apis import init_segmentor, inference_segmentor, show_result_pyplot
-from mmseg.core.evaluation import get_palette
+from mmseg.apis import init_segmentor, inference_segmentor
 
 # Input directory information 
 # make auto-label dir as a argparse variable 
 
-#TODO : make these inputs as argparse inputs 
-#TODO : add erosion to damage area 
-
-# auto_label_dir = "/home/sss/UOS-SSaS Dropbox/05. Data/06. Auto Labeling"
-
-# dataset_name = 'General Crack'
-# raw_img_dir_name = '/home/sss/UOS-SSaS Dropbox/05. Data/06. Auto Labeling/General Crack/01. Raw Image'
-# rsz_img_dir_name = '02. Resized Image'
-# pre_label_dir_name = '03. Pre-labeled Psd Files'
-# corrected_label_dir_name = '04. Corrected Psd files' 
-# rsz_img_size = 2048
-
-# config_file = '/home/sss/UOS-SSaS Dropbox/05. Data/03. Checkpoints/2020.09.02_deeplabv3plus_r101-d8_769x769_40k_concrete_damage_cs/deeplabv3plus_r101-d8_769x769_40k_concrete_damage_cs.py'
-# checkpoint_file = '/home/sss/UOS-SSaS Dropbox/05. Data/03. Checkpoints/2020.09.02_deeplabv3plus_r101-d8_769x769_40k_concrete_damage_cs/iter_40000.pth'
+#TODO : reduce required arguments 
 
 
-auto_label_dir = "/home/sss/UOS-SSaS Dropbox/05. Data/06. Auto Labeling"
 
-dataset_name = 'KCQR'
-raw_img_dir_name = '/home/sss/UOS-SSaS Dropbox/05. Data/06. Auto Labeling/KCQR/01. Raw Image'
-rsz_img_dir_name = '02. Resized Image'
-pre_label_dir_name = '03. Pre-labeled Psd Files'
-corrected_label_dir_name = '04. Corrected Psd files' 
-rsz_img_size = 1024
-
-config_file = '/home/sss/UOS-SSaS Dropbox/05. Data/03. Checkpoints/2020.09.02_deeplabv3plus_r101-d8_769x769_40k_concrete_damage_cs/deeplabv3plus_r101-d8_769x769_40k_concrete_damage_cs.py'
-checkpoint_file = '/home/sss/UOS-SSaS Dropbox/05. Data/03. Checkpoints/2020.09.02_deeplabv3plus_r101-d8_769x769_40k_concrete_damage_cs/iter_40000.pth'
-
-num_of_class = 4 # not include background 
-
-palette = [
-    [255, 0, 0], # crack 
-    [0, 255, 0], # effl 
-    [0, 255, 255], # rebar
-    [255, 255, 0], # spalling
-]
-
-classes = ['crack', 'efflorescence', 'rebar', 'spalling']
-
-
-def create_layer_from_detection_result(detection_result, class_num, class_name, color_map):
+def create_layer_from_detection_result(detection_result, class_num, class_name, color_map,
+                                        erode_size = 0):
 
     """
     Args :
@@ -66,6 +30,7 @@ def create_layer_from_detection_result(detection_result, class_num, class_name, 
         class_num (int or float) : class number 
         class_name (str) : class_name 
         color_map (list) : RGB value of color to highlight damage area
+        erode_size (int)
 
     Return : 
         damage_layer (pytoshop nested layer) : layer with damage detection 
@@ -73,13 +38,19 @@ def create_layer_from_detection_result(detection_result, class_num, class_name, 
     """
 
     height, width = detection_result[0].shape[0], detection_result[0].shape[1]
-     
-    # create white RGBA image with white color 
-    detection_result_with_transparent_bg = np.ones((height, width, 4) , dtype = np.uint8)*255
-
 
     damage_area = detection_result[0] == class_num
-    non_damage_area = detection_result[0] != class_num
+
+    if not erode_size == 0 : 
+        damage_area = np.asarray(damage_area, dtype = np.uint8)
+        kernel = np.ones((erode_size,erode_size),np.uint8)
+        damage_area = cv2.erode(damage_area, kernel, iterations = 1)
+        damage_area = np.asarray(damage_area, dtype = bool)
+
+    non_damage_area = damage_area == 0
+
+    # create white RGBA image with white color 
+    detection_result_with_transparent_bg = np.ones((height, width, 4) , dtype = np.uint8)*255
     detection_result_with_transparent_bg[damage_area, 0] =  color_map[0]
     detection_result_with_transparent_bg[damage_area, 1] =  color_map[1]
     detection_result_with_transparent_bg[damage_area , 2] =  color_map[2]
@@ -102,12 +73,20 @@ def create_layer_from_detection_result(detection_result, class_num, class_name, 
 
     return damage_layer
 
-def pre_label_imgs(rsz_img_dir, pre_label_dir):
+def pre_label_imgs(rsz_img_dir, pre_label_dir, model_config_file, 
+                    model_checkpoint_file, num_of_class, palette, 
+                    classes, erode_size):
 
     """
     Args : 
         rsz_img_dir   : directory of resized image files 
         pre_label_dir : directory of pre-labeled image files 
+        model_config_file : 
+        model_checkpoint_file :
+        num_of_class
+        palette
+        classes
+        erode_size 
 
     Return : 
         None : This function directly saves images in pre_label_dir
@@ -122,13 +101,12 @@ def pre_label_imgs(rsz_img_dir, pre_label_dir):
     rsz_img_list = [osp.basename(x) for x in glob(osp.join(rsz_img_dir, '*.jpg'))]
     print("{} images read from the resized image folder.".format(len(rsz_img_list)))
 
-
     print("Compare resized image list and psd file list....")
-    imgs_to_pre_label_list = [img_path for img_path in rsz_img_list if img_path not in pre_label_list]
+    imgs_to_pre_label_list = [img_path for img_path in rsz_img_list if img_path[:-4] + '.jpg' not in pre_label_list]
     print("{} images are found not in the psd files folder.".format(len(imgs_to_pre_label_list)))
 
     # build the model from a config file and a checkpoint file
-    model = init_segmentor(config_file, checkpoint_file, device='cuda:0')
+    model = init_segmentor(model_config_file, model_checkpoint_file, device='cuda:0')
 
     for img_filename in tqdm(imgs_to_pre_label_list): 
 
@@ -156,7 +134,8 @@ def pre_label_imgs(rsz_img_dir, pre_label_dir):
             
             class_name = classes[class_num]
             color_map = palette[class_num]
-            damage_layer = create_layer_from_detection_result(detection_result, class_num+1, class_name, color_map) # add 1 to class num to avoid background
+            damage_layer = create_layer_from_detection_result(detection_result, class_num+1, 
+                                                                class_name, color_map, erode_size=erode_size) # add 1 to class num to avoid background
             psd_layers.append(damage_layer)
             
 
@@ -171,12 +150,13 @@ def pre_label_imgs(rsz_img_dir, pre_label_dir):
             output.write(fd)
 
 
-def resize_and_move_imgs(raw_img_dir, rsz_img_dir): 
+def resize_and_move_imgs(raw_img_dir, rsz_img_dir, rsz_img_size): 
 
     """
     Args : 
         raw_img_dir : directory of raw image files 
         rsz_img_dir : directory of resized image files 
+        rsz_img_size 
 
     Return : 
         None : This function directly saves images in rsz_img_dir
@@ -217,21 +197,46 @@ def resize_and_move_imgs(raw_img_dir, rsz_img_dir):
         sscv.imwrite(rsz_img_path, rsz_img)
 
 
-def main(): 
+def main(auto_label_dir, dataset_name, rsz_img_size, model_config_file,
+         model_checkpoint_file, num_of_class, palette, classes, erode_size): 
 
     print("Start Auto Labeling Procedure ....")
 
     dataset_dir = osp.join(auto_label_dir, dataset_name)
-    raw_img_dir = osp.join(raw_img_dir_name)
-    rsz_img_dir = osp.join(dataset_dir, rsz_img_dir_name)
-    pre_label_dir = osp.join(dataset_dir, pre_label_dir_name)
-    corrected_label_dir = osp.join(dataset_dir, corrected_label_dir_name) 
+    raw_img_dir = osp.join(dataset_dir, '01. Raw Image')
+    rsz_img_dir = osp.join(dataset_dir, '02. Resized Image')
+    pre_label_dir = osp.join(dataset_dir, '03. Pre-labeled Psd Files')
+    corrected_label_dir = osp.join(dataset_dir, '04. Corrected Psd files' ) 
 
-    resize_and_move_imgs(raw_img_dir, rsz_img_dir)
+    resize_and_move_imgs(raw_img_dir, rsz_img_dir, rsz_img_size)
 
-    pre_label_imgs(rsz_img_dir, pre_label_dir)
+    pre_label_imgs(rsz_img_dir, pre_label_dir,
+                    model_config_file, model_checkpoint_file,
+                    num_of_class, palette, classes, erode_size)
 
 
 if __name__ == "__main__" : 
-    main()
+    
+    parser = argparse.ArgumentParser(description='Get configuration file to load.')
+    parser.add_argument('--config', type=str, help='configuration file path')
+    args = parser.parse_args()
+    config_filename = args.config
+
+    if config_filename == 'kcqr_config.py' : 
+        from kcqr_config import configs
+    
+    auto_label_dir = configs['auto_label_dir'] 
+    dataset_name = configs['dataset_name'] 
+    rsz_img_size = configs['rsz_img_size'] 
+    model_config_file = configs['model_config_file'] 
+    model_checkpoint_file = configs['model_checkpoint_file'] 
+    num_of_class = configs['num_of_class'] 
+    erode_size = configs['erode_size'] 
+    palette = configs['palette'] 
+    classes = configs['classes'] 
+    
+        
+    main(auto_label_dir, dataset_name, rsz_img_size,
+         model_config_file, model_checkpoint_file, 
+         num_of_class, palette, classes, erode_size)
     
