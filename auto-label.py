@@ -226,6 +226,8 @@ if __name__ == "__main__" :
         from kcqr_config import configs
     elif config_filename == 'general_crack_config.py' : 
         from general_crack_config import configs
+    elif config_filename == 'road_crack_config.py' : 
+        from road_crack_config import configs
     
     auto_label_dir = configs['auto_label_dir'] 
     dataset_name = configs['dataset_name'] 
